@@ -7,13 +7,15 @@ from UM.OutputDevice import OutputDeviceError
 from cura.Snapshot import Snapshot
 from cura.CuraApplication import CuraApplication
 
-from PyQt5.QtWidgets import QFileDialog
+from PyQt6.QtWidgets import QFileDialog
 from UM.Message import Message
-from PyQt5.QtCore import QUrl,Qt
-from PyQt5.QtGui import QDesktopServices
+from PyQt6.QtCore import QUrl,Qt
+from PyQt6.QtGui import QDesktopServices
 
 import sys
 import os
+
+import base64
 
 from UM.i18n import i18nCatalog
 catalog = i18nCatalog("uranium")
@@ -59,14 +61,14 @@ class Save_File(OutputDevice):
         dialog = QFileDialog()
 
         dialog.setWindowTitle(catalog.i18nc("@title:window", "Save to File"))
-        dialog.setFileMode(QFileDialog.AnyFile)
-        dialog.setAcceptMode(QFileDialog.AcceptSave)
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
 
         # Ensure platform never ask for overwrite confirmation since we do this ourselves
-        dialog.setOption(QFileDialog.DontConfirmOverwrite)
+        dialog.setOption(QFileDialog.Option.DontConfirmOverwrite)
 
         if sys.platform == "linux" and "KDE_FULL_SESSION" in os.environ:
-            dialog.setOption(QFileDialog.DontUseNativeDialog)
+            dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
 
         filters = []
         mime_types = []
@@ -105,7 +107,7 @@ class Save_File(OutputDevice):
         stored_directory = self._preferences.getValue("local_file/dialog_save_path")
         dialog.setDirectory(stored_directory)
 
-        if not dialog.exec_():
+        if not dialog.exec():
             raise OutputDeviceError.UserCanceledError()
 
         save_path = dialog.directory().absolutePath()
@@ -140,13 +142,13 @@ class Save_File(OutputDevice):
             save_file = open(file_name, "w")
             if True:
                 try:
-                    ssnapshot = Snapshot.snapshot(64, 64)
-                    bsnapshot = Snapshot.snapshot(400, 400)
+                    ssnapshot = Snapshot.snapshot(48, 48)
+                    bsnapshot = Snapshot.snapshot(200, 200)
                 except Exception:
                     Logger.logException("w", "Failed to create snapshot image")
-                save_file.write(self.add_screenshot(ssnapshot, 64, 64, ';image64:'))
+                save_file.write(self.add_screenshot(ssnapshot, 48, 48, 'jpg'))
                 save_file.write('\n')
-                save_file.write(self.add_screenshot(bsnapshot, 400, 400, ';image400:'))
+                save_file.write(self.add_screenshot(bsnapshot, 200, 200, 'jpg'))
                 save_file.write("\n")
             for line in _gcode:
                 save_file.write(line)
@@ -155,7 +157,7 @@ class Save_File(OutputDevice):
             self.writeFinished.emit(self)
             self.writeSuccess.emit(self)
             message = Message(
-                catalog.i18nc("@info:status", "Saved to <filename>{0}</filename>").format(job_name))
+                catalog.i18nc("@info:status", "Saved to <filename>{0}</filename>").format(file_name))
             message.addAction("open_folder", catalog.i18nc("@action:button", "Open Folder"), "open-folder",
                               catalog.i18nc("@info:tooltip", "Open the folder containing the file"))
             message._folder = os.path.dirname(file_name)
@@ -174,31 +176,50 @@ class Save_File(OutputDevice):
             QDesktopServices.openUrl(QUrl.fromLocalFile(message._folder))
 
     def add_screenshot(self, img, width, height, img_type):
+        currentPath = self._preferences.getValue("local_file/dialog_profile_path")+"\\preview.jpg"
+        img.save(currentPath)
         result = ""
-        b_image = img.scaled(width, height, Qt.KeepAspectRatio)
-        img_size = b_image.size()
-        result += img_type
-        datasize = 0
-        for i in range(img_size.height()):
-            for j in range(img_size.width()):
-                pixel_color = b_image.pixelColor(j, i)
-                r = pixel_color.red() >> 3
-                g = pixel_color.green() >> 2
-                b = pixel_color.blue() >> 3
-                rgb = (r << 11) | (g << 5) | b
-                strHex = "%x" % rgb
-                if len(strHex) == 3:
-                    strHex = '0' + strHex[0:3]
-                elif len(strHex) == 2:
-                    strHex = '00' + strHex[0:2]
-                elif len(strHex) == 1:
-                    strHex = '000' + strHex[0:1]
-                if strHex[2:4] != '':
-                    result += strHex[2:4]
-                    datasize += 2
-                if strHex[0:2] != '':
-                    result += strHex[0:2]
-                    datasize += 2
-                if datasize >= 50:
-                    datasize = 0
+        try:
+            image = open(currentPath,'rb')
+            if True:
+                image_read = image.read()
+                image.close()
+
+                image_64_encode = base64.b64encode(image_read)
+
+                icount = len(image_64_encode)
+                lineNum=0
+                if icount%76==0:
+                    lineNum = icount/76
+                else:
+                    lineNum = icount / 76 +1
+                lineNum += 2 # 头尾两行
+
+                startLinNo = int(height* 0.0167 + 0.5)
+                endLineNo = int(height-startLinNo)
+
+                strhead =img_type+' begin '+str(width) +'*'+str(height) +' '+str(len(image_read))+' '+str(startLinNo)+' '+str(endLineNo)+' '+str(500)
+                strend =img_type +' end'
+                ilineNum =int(lineNum)
+                for i in range(ilineNum):
+                    if i == 0:
+                        result += "; "
+                        result += strhead
+                        result += "\n"
+                    elif i == ilineNum - 1:
+                        result += "; "
+                        result += strend
+                        result += "\n"
+                    elif i == ilineNum - 2:
+                        #strHex = "%x" % str(image_64_encode[76*(i-1):])
+                        result += "; "
+                        result += str(image_64_encode[76*(i-1):],encoding = "utf-8")
+                        result += "\n"
+                    else:
+                        #strHex = "%x" % str(image_64_encode[76*(i-1):76*(i-1)+76])
+                        result += "; "
+                        result += str(image_64_encode[76*(i-1):76*(i-1)+76],encoding = "utf-8")
+                        result += "\n"
+        except Exception:
+            self.writeError.emit(self)
         return result
